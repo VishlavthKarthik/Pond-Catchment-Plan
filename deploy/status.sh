@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 cd /home/student/pond_catchment
 
+PORT=3000
+
 echo "=== Process Status ==="
-ps aux | grep uvicorn | grep 3317 || echo "No uvicorn process found on port 3317"
+ps aux | grep uvicorn | grep "${PORT}" || echo "No uvicorn process found on port ${PORT}"
 echo ""
 
-echo "=== Port 3317 Listener ==="
-ss -tulpn | grep 3317 || echo "Port 3317 is not active"
+echo "=== Port ${PORT} Listener ==="
+ss -tulpn | grep "${PORT}" || echo "Port ${PORT} is not active"
 echo ""
 
 echo "=== Health Endpoint Test ==="
-curl -s http://127.0.0.1:3317/health || echo "Health check failed"
+curl -s "http://127.0.0.1:${PORT}/health" || echo "Health check failed on port ${PORT}"
 echo ""
