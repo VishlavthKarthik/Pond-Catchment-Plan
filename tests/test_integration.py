@@ -105,11 +105,21 @@ class TestSampleKmlIntegration:
         body = response.json()
         assert "contour_interval_m" in body
         assert "elevation_range_m" in body
+        assert "total_contour_lines" in body
         assert "grid_resolution_m" in body
+        assert "grid_shape" in body
         assert "resolution_auto_adjusted" in body
         assert "pond_site" in body
         assert "catchment" in body
         assert "processing_time_ms" in body
+        # pond_site sub-fields
+        ps = body["pond_site"]
+        assert "flow_accumulation_cells" in ps
+        # catchment sub-fields
+        c = body["catchment"]
+        for f in ("max_slope_pct", "min_elevation_m", "max_elevation_m",
+                  "relief_m", "watershed_cell_count", "boundary_geojson"):
+            assert f in c, f"Missing catchment field: {f}"
 
     def test_elevation_range_sanity(self, response):
         body = response.json()

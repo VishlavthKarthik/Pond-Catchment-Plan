@@ -19,3 +19,4 @@ build/
 *.kml
 *.kmz
 !contours_1m.kml
+REPORT.md

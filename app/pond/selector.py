@@ -51,6 +51,7 @@ class PondSite:
     lat: float
     lon: float
     elevation_m: float
+    flow_accumulation_cells: int
 
 
 @dataclass
@@ -58,6 +59,11 @@ class CatchmentInfo:
     area_m2: float
     area_hectares: float
     mean_slope_pct: float
+    max_slope_pct: float
+    min_elevation_m: float
+    max_elevation_m: float
+    relief_m: float
+    watershed_cell_count: int
     boundary_geojson: dict[str, Any]
 
 
@@ -218,15 +224,20 @@ def select_pond_and_catchment(
         )
 
     # --- scoring ---
+    # Normalise log-accumulation against the GLOBAL grid max so that the
+    # truly highest-drainage-area cell always scores close to 1.0, regardless
+    # of which cells are in the candidate set.
     log_accum = np.log1p(terrain.flow_accum.astype(np.float64))
-    score_accum = _normalise(np.where(mask, log_accum, np.nan))
+    global_log_max = log_accum.max()
+    if global_log_max > 0:
+        score_accum = log_accum / global_log_max  # [0, 1] globally
+    else:
+        score_accum = np.zeros_like(log_accum)
+    score_accum = np.where(mask, score_accum, 0.0)
 
-    # Elevation component: lower elevation within the candidate set is better
+    # Elevation component: normalise within candidates (lower is better)
     elevation_score = _normalise(np.where(mask, terrain.filled_dem, np.nan))
     score_low = 1.0 - elevation_score  # invert: lower elev → higher score
-
-    # Replace NaN with 0 for scoring (non-candidates contribute nothing)
-    score_accum = np.nan_to_num(score_accum, nan=0.0)
     score_low = np.nan_to_num(score_low, nan=0.0)
 
     total_score = w_accum * score_accum + w_low * score_low
@@ -259,14 +270,26 @@ def select_pond_and_catchment(
         catchment_poly_proj, dem_result.transformer_to_lonlat
     )
 
-    area_m2 = float(len(upstream) * cell_area_m2)
+    n_cells = len(upstream)
+    area_m2 = float(n_cells * cell_area_m2)
     area_ha = area_m2 / 10_000.0
 
-    # --- mean slope over catchment ---
+    # --- slope and elevation stats over catchment cells ---
     slope_grid = compute_slope_percent(terrain.filled_dem, res)
-    rows_up = [r for r, c in upstream]
-    cols_up = [c for r, c in upstream]
-    mean_slope = float(np.mean(slope_grid[rows_up, cols_up]))
+    rows_up = np.array([r for r, c in upstream], dtype=np.int32)
+    cols_up = np.array([c for r, c in upstream], dtype=np.int32)
+
+    catchment_slopes = slope_grid[rows_up, cols_up]
+    catchment_elevs  = terrain.filled_dem[rows_up, cols_up]
+
+    mean_slope = float(np.mean(catchment_slopes))
+    max_slope  = float(np.max(catchment_slopes))
+    min_elev   = float(np.min(catchment_elevs))
+    max_elev   = float(np.max(catchment_elevs))
+    relief     = round(max_elev - min_elev, 2)
+
+    # Flow accumulation value at the outlet cell
+    outlet_accum = int(terrain.flow_accum[outlet_r, outlet_c])
 
     # --- GeoJSON representation ---
     geojson_dict = dict(mapping(catchment_poly_wgs84))
@@ -276,11 +299,17 @@ def select_pond_and_catchment(
             lat=round(float(outlet_lat), 6),
             lon=round(float(outlet_lon), 6),
             elevation_m=round(outlet_elev, 2),
+            flow_accumulation_cells=outlet_accum,
         ),
         catchment=CatchmentInfo(
             area_m2=round(area_m2, 2),
             area_hectares=round(area_ha, 4),
             mean_slope_pct=round(mean_slope, 2),
+            max_slope_pct=round(max_slope, 2),
+            min_elevation_m=round(min_elev, 2),
+            max_elevation_m=round(max_elev, 2),
+            relief_m=relief,
+            watershed_cell_count=n_cells,
             boundary_geojson=geojson_dict,
         ),
     )

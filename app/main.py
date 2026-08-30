@@ -37,7 +37,7 @@ async def health() -> dict:
 async def analyze_contour(
     file: UploadFile = File(..., description="KML or KMZ contour map"),
     resolution_m: float = Form(10.0, description="DEM grid resolution in metres"),
-    min_catchment_area_m2: float = Form(500.0, description="Minimum catchment area (m²)"),
+    min_catchment_area_m2: float = Form(10000.0, description="Minimum catchment area (m²)"),
 ) -> AnalyzeResponse:
     t0 = time.perf_counter()
 
@@ -86,20 +86,29 @@ async def analyze_contour(
 
         from app.api.schemas import PondSiteSchema, CatchmentSchema
 
+        rows, cols = dem_result.elevation_grid.shape
         return AnalyzeResponse(
             contour_interval_m=dataset.contour_interval_m,
             elevation_range_m=[dataset.elevation_min, dataset.elevation_max],
+            total_contour_lines=len(dataset.polylines),
             grid_resolution_m=dem_result.actual_resolution_m,
+            grid_shape=[rows, cols],
             resolution_auto_adjusted=dem_result.auto_adjusted,
             pond_site=PondSiteSchema(
                 lat=result.pond_site.lat,
                 lon=result.pond_site.lon,
                 elevation_m=result.pond_site.elevation_m,
+                flow_accumulation_cells=result.pond_site.flow_accumulation_cells,
             ),
             catchment=CatchmentSchema(
                 area_m2=result.catchment.area_m2,
                 area_hectares=result.catchment.area_hectares,
                 mean_slope_pct=result.catchment.mean_slope_pct,
+                max_slope_pct=result.catchment.max_slope_pct,
+                min_elevation_m=result.catchment.min_elevation_m,
+                max_elevation_m=result.catchment.max_elevation_m,
+                relief_m=result.catchment.relief_m,
+                watershed_cell_count=result.catchment.watershed_cell_count,
                 boundary_geojson=result.catchment.boundary_geojson,
             ),
             processing_time_ms=elapsed_ms,
