@@ -1,0 +1,20 @@
+[Unit]
+Description=Pond Catchment Analysis API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/pond-api
+Environment="PATH=/opt/pond-api/.venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/pond-api/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+
+# Safety limits for the constrained box
+MemoryMax=450M
+CPUQuota=95%
+
+[Install]
+WantedBy=multi-user.target
