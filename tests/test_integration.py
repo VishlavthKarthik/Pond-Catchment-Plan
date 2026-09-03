@@ -42,7 +42,7 @@ def test_health():
 def test_wrong_extension_returns_400():
     resp = client.post(
         "/analyzeContour",
-        files={"file": ("terrain.tif", b"garbage", "application/octet-stream")},
+        files={"contour_map": ("terrain.tif", b"garbage", "application/octet-stream")},
         data={"resolution_m": "10.0"},
     )
     assert resp.status_code == 400
@@ -52,7 +52,7 @@ def test_wrong_extension_returns_400():
 def test_corrupt_kml_returns_400():
     resp = client.post(
         "/analyzeContour",
-        files={"file": ("bad.kml", b"<not valid xml <<<", "application/xml")},
+        files={"contour_map": ("bad.kml", b"<not valid xml <<<", "application/xml")},
         data={"resolution_m": "10.0"},
     )
     assert resp.status_code == 400
@@ -66,7 +66,7 @@ def test_empty_kml_returns_400():
     """).encode()
     resp = client.post(
         "/analyzeContour",
-        files={"file": ("empty.kml", empty_kml, "application/vnd.google-earth.kml+xml")},
+        files={"contour_map": ("empty.kml", empty_kml, "application/vnd.google-earth.kml+xml")},
         data={"resolution_m": "10.0"},
     )
     assert resp.status_code == 400
@@ -89,7 +89,7 @@ class TestSampleKmlIntegration:
             data = f.read()
         resp = client.post(
             "/analyzeContour",
-            files={"file": ("contours_1m.kml", data, "application/vnd.google-earth.kml+xml")},
+            files={"contour_map": ("contours_1m.kml", data, "application/vnd.google-earth.kml+xml")},
             data={"resolution_m": "20.0", "min_catchment_area_m2": "500"},
         )
         request.cls.resp = resp

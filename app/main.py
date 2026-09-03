@@ -35,14 +35,14 @@ async def health() -> dict:
     summary="Analyse a contour map and return pond site + catchment",
 )
 async def analyze_contour(
-    file: UploadFile = File(..., description="KML or KMZ contour map"),
+    contour_map: UploadFile = File(..., description="KML or KMZ contour map"),
     resolution_m: float = Form(10.0, description="DEM grid resolution in metres"),
     min_catchment_area_m2: float = Form(10000.0, description="Minimum catchment area (m²)"),
 ) -> AnalyzeResponse:
     t0 = time.perf_counter()
 
     # --- validate extension ---
-    filename = file.filename or ""
+    filename = contour_map.filename or ""
     ext = Path(filename).suffix.lower()
     if ext not in (".kml", ".kmz"):
         raise HTTPException(
@@ -56,7 +56,7 @@ async def analyze_contour(
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp_path = tmp.name
-            while chunk := await file.read(1 << 20):  # 1 MB chunks
+            while chunk := await contour_map.read(1 << 20):  # 1 MB chunks
                 tmp.write(chunk)
 
         # [1] Parse
