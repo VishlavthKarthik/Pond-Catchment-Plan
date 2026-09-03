@@ -12,7 +12,7 @@ if [ -n "$PID_ON_PORT" ]; then
 fi
 
 echo "Starting Pond Catchment API on port ${PORT}..."
-nohup /home/student/pond_catchment/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT} > /home/student/pond_catchment/server.log 2>&1 &
-echo $! > /home/student/pond_catchment/server.pid
+nohup /home/student/pond_catchment/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT} > /home/student/pond_catchment/deploy/server.log 2>&1 &
+echo $! > /home/student/pond_catchment/deploy/server.pid
 sleep 2
-echo "Server started (PID: $(cat /home/student/pond_catchment/server.pid)) on port ${PORT}"
+echo "Server started (PID: $(cat /home/student/pond_catchment/deploy/server.pid)) on port ${PORT}"
