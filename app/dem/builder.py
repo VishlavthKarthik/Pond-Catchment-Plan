@@ -62,6 +62,9 @@ class DEMResult:
     transformer_to_lonlat: Transformer
     """pyproj Transformer: projected CRS → WGS84 lon/lat."""
 
+    transformer_to_proj: Transformer | None = None
+    """pyproj Transformer: WGS84 lon/lat → projected CRS."""
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -199,4 +202,5 @@ def build_dem(
         actual_resolution_m=actual_resolution_m,
         auto_adjusted=auto_adjusted,
         transformer_to_lonlat=transformer_inv,
+        transformer_to_proj=transformer_fwd,
     )

@@ -1,9 +1,8 @@
-"""Pydantic response schemas for the API."""
+"""Pydantic response and request schemas for the API."""
 
 from __future__ import annotations
 
-from typing import Any
-
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -30,6 +29,21 @@ class CatchmentSchema(BaseModel):
     )
 
 
+class HydrologySchema(BaseModel):
+    annual_rainfall_mm: float = Field(..., description="Historical annual precipitation in mm")
+    monsoon_rainfall_mm: float = Field(..., description="Design monsoon precipitation in mm (June-Sept)")
+    runoff_coefficient: float = Field(..., description="Dimensionless runoff coefficient C (0.12 - 0.60)")
+    expected_water_volume_m3: float = Field(..., description="Annual expected runoff volume in cubic metres")
+    expected_water_volume_liters: float = Field(..., description="Expected harvest volume in Litres")
+    expected_water_volume_megaliters: float = Field(..., description="Expected harvest volume in Million Litres (ML)")
+    recommended_pond_depth_m: float = Field(..., description="Recommended excavation water depth in metres")
+    recommended_pond_area_m2: float = Field(..., description="Recommended surface water spread area in m²")
+    recommended_pond_storage_capacity_m3: float = Field(..., description="Recommended active storage capacity in m³")
+    recommended_dimensions: str = Field(..., description="Suggested pond physical dimensions (Length × Width × Depth)")
+    estimated_household_days: int = Field(..., description="Estimated rural household water security days supported")
+    rainfall_source: str = Field(..., description="Data source for rainfall statistics")
+
+
 class AnalyzeResponse(BaseModel):
     contour_interval_m: float = Field(..., description="Detected contour interval in metres")
     elevation_range_m: list[float] = Field(
@@ -44,4 +58,29 @@ class AnalyzeResponse(BaseModel):
     )
     pond_site: PondSiteSchema
     catchment: CatchmentSchema
+    hydrology: Optional[HydrologySchema] = Field(
+        None, description="Rainfall, harvestable runoff volume, and pond sizing"
+    )
     processing_time_ms: int = Field(..., description="Total server-side processing time in ms")
+
+
+class SelectedAreaRequest(BaseModel):
+    coordinates: list[list[float]] = Field(
+        ...,
+        description="Coordinates of the selected land polygon as [[lat, lon], ...] or GeoJSON polygon coordinates",
+    )
+    resolution_m: float = Field(10.0, description="Grid resolution for analysis")
+    min_catchment_area_m2: float = Field(5000.0, description="Minimum catchment area constraint")
+    override_rainfall_mm: Optional[float] = Field(None, description="Optional custom rainfall value in mm")
+    soil_type: str = Field("medium", description="Soil classification: sandy, medium, loamy, clayey, rocky")
+    target_depth_m: float = Field(3.0, description="Target pond depth in metres")
+
+
+class AreaAnalyzeResponse(BaseModel):
+    selected_land_geojson: dict[str, Any] = Field(..., description="GeoJSON Polygon of user-selected land area")
+    selected_area_m2: float = Field(..., description="Total area of the selected land in m²")
+    selected_area_hectares: float = Field(..., description="Total area of the selected land in hectares")
+    pond_site: PondSiteSchema
+    catchment: CatchmentSchema
+    hydrology: HydrologySchema
+    processing_time_ms: int

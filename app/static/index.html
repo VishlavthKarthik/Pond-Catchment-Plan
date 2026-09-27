@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HydroPond AI | Precision Village Pond & Catchment Planning</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet Geoman for drawing land polygons -->
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+  <!-- FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app-container">
+    
+    <!-- Left Navigation / Control Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-icon">
+            <i class="fa-solid fa-water"></i>
+          </div>
+          <div class="brand-title">
+            <h1>HydroPond AI</h1>
+            <span>Village Pond & Catchment GIS</span>
+          </div>
+        </div>
+        <div class="status-badge" id="system-status">
+          <span class="status-dot"></span>
+          <span>Online</span>
+        </div>
+      </div>
+
+      <div class="sidebar-content">
+        
+        <!-- Step 1: Land Area Selection -->
+        <div class="panel-card">
+          <div class="panel-card-header">
+            <span class="panel-card-title"><i class="fa-solid fa-draw-polygon"></i> 1. Select Land Area</span>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+            Choose a land parcel on the map or upload a contour dataset to determine the optimal pond site and catchment.
+          </p>
+          <div class="tool-grid">
+            <button class="btn btn-secondary" id="btn-draw-poly" title="Draw custom polygon on map">
+              <i class="fa-solid fa-pen-ruler"></i> Draw Area
+            </button>
+            <button class="btn btn-secondary" id="btn-load-sample" title="Load sample village parcel">
+              <i class="fa-solid fa-map-location-dot"></i> Sample Land
+            </button>
+          </div>
+          <div class="tool-grid">
+            <button class="btn btn-secondary" id="btn-open-upload" title="Upload KML / KMZ map">
+              <i class="fa-solid fa-file-arrow-up"></i> Upload KML
+            </button>
+            <button class="btn btn-secondary" id="btn-clear-selection" title="Reset current selection">
+              <i class="fa-solid fa-trash-can"></i> Clear Map
+            </button>
+          </div>
+
+          <div id="selected-area-summary" style="display: none; margin-top: 10px; padding: 10px; background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: var(--radius-sm); font-size: 12px;">
+            <i class="fa-solid fa-circle-check" style="color: var(--accent);"></i>
+            <span id="selected-area-text" style="font-weight: 600; color: #fff;">Land Selected: 5.4 ha</span>
+          </div>
+        </div>
+
+        <!-- Step 2: Hydrology & Design Parameters -->
+        <div class="panel-card">
+          <div class="panel-card-header">
+            <span class="panel-card-title"><i class="fa-solid fa-sliders"></i> 2. Hydrology Parameters</span>
+          </div>
+          <div class="form-group">
+            <label for="soil-select">Soil Classification & Infiltration:</label>
+            <select class="form-control" id="soil-select">
+              <option value="medium">Medium / Loamy (Default, C ~ 0.32)</option>
+              <option value="clayey">Clayey Soil (Low Infiltration, C ~ 0.38)</option>
+              <option value="sandy">Sandy Loam (High Infiltration, C ~ 0.25)</option>
+              <option value="rocky">Rocky / Hardpan (Very Low Infiltration, C ~ 0.44)</option>
+            </select>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group">
+              <label for="target-depth">Target Depth (m):</label>
+              <input type="number" class="form-control" id="target-depth" value="3.0" min="1.5" max="6.0" step="0.5">
+            </div>
+            <div class="form-group">
+              <label for="rainfall-override">Rainfall (mm/yr):</label>
+              <input type="number" class="form-control" id="rainfall-override" placeholder="Auto (1,150 mm)" min="200" max="3000">
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Button -->
+        <button class="btn btn-primary btn-block btn-lg" id="btn-run-analysis">
+          <i class="fa-solid fa-bolt"></i> <span>Analyze Land & Generate Plan</span>
+        </button>
+
+        <!-- Step 3: Results Panel (populated dynamically) -->
+        <div id="results-container" style="display: none; display: flex; flex-direction: column; gap: 16px;">
+          
+          <!-- Expected Water Volume Highlight Card -->
+          <div class="hero-metric">
+            <div class="hero-metric-label">Expected Rainwater Harvested</div>
+            <div class="hero-metric-value">
+              <span id="res-volume-ml">14.17</span> <span style="font-size: 16px; font-weight: 600;">Million Litres (ML)</span>
+            </div>
+            <div class="hero-metric-sub">
+              <span id="res-volume-m3">14,173</span> m³ total monsoon runoff volume
+            </div>
+            <div class="hero-metric-desc">
+              <i class="fa-solid fa-hands-holding-child" style="color: var(--accent);"></i>
+              <span id="res-household-days">Provides dry-season water for ~130 families for 240 days</span>
+            </div>
+          </div>
+
+          <!-- Recommended Pond Location -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <span class="panel-card-title"><i class="fa-solid fa-location-dot" style="color: #38bdf8;"></i> Recommended Pond Site</span>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="stat-label">Latitude</div>
+                <div class="stat-value" id="res-pond-lat">21.257206°</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Longitude</div>
+                <div class="stat-value" id="res-pond-lon">81.309778°</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Bed Elevation</div>
+                <div class="stat-value" id="res-pond-elev">288.7 m</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Flow Accumulation</div>
+                <div class="stat-value" id="res-pond-accum">537 cells</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Catchment Characteristics -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <span class="panel-card-title"><i class="fa-solid fa-mountain" style="color: #a78bfa;"></i> Catchment Characteristics</span>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="stat-label">Catchment Area</div>
+                <div class="stat-value" id="res-catchment-ha">5.41 ha</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Area (m²)</div>
+                <div class="stat-value" id="res-catchment-m2">54,100 m²</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Mean Terrain Slope</div>
+                <div class="stat-value" id="res-mean-slope">4.26 %</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Elevation Relief</div>
+                <div class="stat-value" id="res-relief">7.3 m</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pond Engineering & Sizing -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <span class="panel-card-title"><i class="fa-solid fa-ruler-combined" style="color: #34d399;"></i> Recommended Pond Design</span>
+            </div>
+            <div class="stat-box" style="margin-bottom: 8px;">
+              <div class="stat-label">Suggested Dimensions (Trapezoidal 1.5:1)</div>
+              <div class="stat-value" id="res-dimensions" style="font-size: 14px; color: #34d399;">78.0m × 52.0m × 3.0m</div>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="stat-label">Target Storage Cap.</div>
+                <div class="stat-value" id="res-storage-cap">8,504 m³</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Surface Area</div>
+                <div class="stat-value" id="res-surface-area">4,002 m²</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Export & Data Tools -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <span class="panel-card-title"><i class="fa-solid fa-file-export"></i> Export & Documentation</span>
+            </div>
+            <div class="tool-grid">
+              <button class="btn btn-secondary" id="btn-export-geojson">
+                <i class="fa-solid fa-download"></i> GeoJSON
+              </button>
+              <button class="btn btn-secondary" id="btn-print-report">
+                <i class="fa-solid fa-print"></i> Print Report
+              </button>
+            </div>
+            <button class="btn btn-secondary btn-block" id="btn-toggle-json" style="margin-top: 8px; font-size: 11px;">
+              <i class="fa-solid fa-code"></i> Inspect Raw API JSON
+            </button>
+            <div id="json-viewer-container" style="display: none; margin-top: 10px;">
+              <pre class="json-viewer" id="raw-json-output"></pre>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- Center Map Canvas -->
+    <main id="map-container">
+      <div id="map"></div>
+
+      <!-- Floating Map Layer Controls -->
+      <div class="map-floating-panel">
+        <div class="map-control-card">
+          <div style="font-size: 12px; font-weight: 700; margin-bottom: 8px; color: var(--text-muted); text-transform: uppercase;">
+            <i class="fa-solid fa-layer-group"></i> Overlays
+          </div>
+          <div class="layer-toggle-group">
+            <label class="layer-toggle">
+              <input type="checkbox" id="layer-pond" checked>
+              <span>Suggested Pond Site</span>
+            </label>
+            <label class="layer-toggle">
+              <input type="checkbox" id="layer-catchment" checked>
+              <span>Catchment Boundary</span>
+            </label>
+            <label class="layer-toggle">
+              <input type="checkbox" id="layer-land" checked>
+              <span>Selected Land Parcel</span>
+            </label>
+            <label class="layer-toggle">
+              <input type="checkbox" id="layer-contours" checked>
+              <span>Elevation Contours (1m)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="map-control-card" style="padding: 8px 12px; display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="btn-zoom-fit" title="Zoom to fit results" style="padding: 6px 10px; font-size: 11px;">
+            <i class="fa-solid fa-compress"></i> Zoom to Fit
+          </button>
+          <button class="btn btn-secondary" id="btn-toggle-basemap" title="Switch Basemap" style="padding: 6px 10px; font-size: 11px;">
+            <i class="fa-solid fa-globe"></i> Satellite / Map
+          </button>
+        </div>
+      </div>
+
+      <!-- Bottom HUD Status Bar -->
+      <div class="hud-bar">
+        <span>Cursor: <strong id="hud-coords">21.2572° N, 81.3097° E</strong></span>
+        <span>Resolution: <strong>10 m DEM</strong></span>
+        <span>CRS: <strong>WGS84 / UTM 44N</strong></span>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Upload Modal -->
+  <div class="modal-overlay" id="upload-modal">
+    <div class="modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="font-size: 16px; font-weight: 700; color: #fff;">
+          <i class="fa-solid fa-file-arrow-up" style="color: var(--accent);"></i> Upload Contour Map
+        </h3>
+        <button id="btn-close-modal" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px;">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+        Select or drag a <code>.kml</code> or <code>.kmz</code> file containing contour lines for any village or region.
+      </p>
+      <div class="drop-zone" id="drop-zone">
+        <i class="fa-solid fa-cloud-arrow-up" style="font-size: 36px; color: var(--accent); margin-bottom: 10px;"></i>
+        <div style="font-weight: 600; font-size: 14px; color: var(--text-bright);">Click to browse or drop KML file here</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Supports Google Earth KML / KMZ</div>
+        <input type="file" id="file-input" accept=".kml,.kmz" style="display: none;">
+      </div>
+      <div id="file-chosen-name" style="font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 12px;"></div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px;">
+        <button class="btn btn-secondary" id="btn-cancel-upload">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-upload" disabled>Process Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS & Plugins -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  
+  <!-- Application Logic -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -177,6 +177,7 @@ def select_pond_and_catchment(
     w_accum: float = 0.7,
     w_low: float = 0.3,
     border_margin: int = 2,
+    land_polygon: Any = None,
 ) -> PondResult:
     """Select the best pond outlet and delineate its catchment.
 
@@ -196,6 +197,9 @@ def select_pond_and_catchment(
     border_margin:
         Number of cells to exclude from the border (prevents selecting cells
         right at the edge of the DEM where flow routing is unreliable).
+    land_polygon:
+        Optional Shapely geometry (Polygon or MultiPolygon in WGS84 lon/lat)
+        restricting the candidate pond location to a user-selected land area.
 
     Returns
     -------
@@ -216,6 +220,49 @@ def select_pond_and_catchment(
     # Exclude cells with too-small catchments
     catchment_area = terrain.flow_accum.astype(np.float64) * cell_area_m2
     mask &= catchment_area >= min_catchment_area_m2
+
+    # --- optional land area constraint ---
+    if land_polygon is not None:
+        try:
+            from shapely.geometry import Point
+            from shapely.ops import transform as shp_transform
+
+            def _to_proj(lon, lat, z=None):
+                return dem_result.transformer_to_proj.transform(lon, lat)
+
+            poly_proj = shp_transform(_to_proj, land_polygon)
+            minx, miny, maxx, maxy = poly_proj.bounds
+
+            land_mask = np.zeros((rows, cols), dtype=bool)
+            origin_e, origin_n, res_e, res_n = dem_result.transform
+
+            c_min = max(0, int((minx - origin_e) / res_e) - 1)
+            c_max = min(cols, int((maxx - origin_e) / res_e) + 2)
+            r_min = max(0, int((miny - origin_n) / res_n) - 1)
+            r_max = min(rows, int((maxy - origin_n) / res_n) + 2)
+
+            for r in range(r_min, r_max):
+                for c in range(c_min, c_max):
+                    e = origin_e + c * res_e
+                    n = origin_n + r * res_n
+                    pt = Point(e, n)
+                    if poly_proj.contains(pt) or poly_proj.distance(pt) <= res:
+                        land_mask[r, c] = True
+
+            if land_mask.any():
+                combined = mask & land_mask
+                if combined.any():
+                    mask = combined
+                else:
+                    # If min_catchment_area_m2 is too restrictive for this specific parcel,
+                    # select the cell with the highest natural drainage inside the parcel
+                    interior = np.zeros((rows, cols), dtype=bool)
+                    interior[border_margin : rows - border_margin, border_margin : cols - border_margin] = True
+                    mask = land_mask & interior
+                    if not mask.any():
+                        mask = land_mask
+        except Exception:
+            pass
 
     if not mask.any():
         raise ValueError(
