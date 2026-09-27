@@ -106,7 +106,7 @@ The system adopts a modular, layered service-oriented architecture designed for 
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=\linewidth]{architecture-diagram}
+  \includegraphics[width=0.72\linewidth]{architecture-diagram}
   \caption{High-level system architecture showing data flow across client, API, geospatial, and hydrology modules.}
   \label{fig:architecture}
   \Description{High-level system architecture showing data flow across client, API, geospatial, and hydrology modules.}
@@ -207,10 +207,10 @@ The client is engineered as a responsive, modern single-page application (SPA). 
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=\linewidth]{ui-screenshot}
-  \caption{Application interface showing the results overlay.}
+  \includegraphics[width=0.72\linewidth]{ui-screenshot-popup.png}
+  \caption{HydroPond AI Web GIS interface showing user-drawn land parcel (yellow dashed polygon), delineated contributing catchment (cyan polygon), and the recommended pond site marker with detailed popup statistics (.25\,\text{ML}$ volume, 82\,\text{m}$ elevation).}
   \label{fig:ui}
-  \Description{Application interface displaying satellite basemap, land boundary, catchment polygon, and hydrological cards.}
+  \Description{HydroPond AI Web GIS interface displaying user-drawn land parcel, delineated catchment polygon, and recommended pond site popup.}
 \end{figure}
 
 Key frontend visualization capabilities include:
@@ -270,10 +270,10 @@ The system was evaluated against the benchmark 1-meter interval contour dataset 
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=\linewidth]{results-overlay}
-  \caption{Example results overlay for a selected village.}
+  \includegraphics[width=0.72\linewidth]{ui-screenshot-14ml.jpg}
+  \caption{Web GIS analytical run for the primary village benchmark parcel, showing optimal drainage convergence at elevation $288.7\,\text{m}$ with $14.17\,\text{Million Litres}$ ($14,173\,\text{m}^3$) estimated runoff collection.}
   \label{fig:results}
-  \Description{Example results overlay for a selected village showing catchment boundary, elevation contours, and optimal pond location.}
+  \Description{Web GIS interface displaying 14.17 ML runoff estimation for the primary village benchmark parcel.}
 \end{figure}
 
 When evaluating the primary village drainage basin, the system generated the following quantitative metrics:
@@ -337,26 +337,13 @@ The complete source code, automated test suite, deployment configuration, and te
 \textbf{Repository URL:} \url{https://github.com/VishlavthKarthik/Pond-Catchment-Plan}
 \end{center}
 
-\subsection{Repository Organization}
+\subsection{Repository Organization and Live Deployment}
 \begin{itemize}
-    \item \texttt{app/main.py}: FastAPI application endpoints, routing, and static file serving.
-    \item \texttt{app/static/}: Web GIS frontend client (\texttt{index.html}, \texttt{style.css}, \texttt{app.js}).
-    \item \texttt{app/hydrology/calculator.py}: Rainfall retrieval, CWC Rational Runoff, and pond dimension sizing.
-    \item \texttt{app/pond/selector.py}: Optimal pond scoring and land-constrained catchment delineation.
-    \item \texttt{app/terrain/analysis.py}: Wang-Liu Priority-Flood depression filling and D8 flow routing.
-    \item \texttt{app/dem/builder.py}: Reprojection to UTM and Scipy Delaunay surface interpolation.
-    \item \texttt{app/parser/kml\_parser.py}: Namespace-agnostic KML/KMZ polyline parser.
-    \item \texttt{deploy/}: Production lifecycle scripts (\texttt{start.sh}, \texttt{stop.sh}, \texttt{status.sh}).
-    \item \texttt{tests/}: 45 automated unit and integration tests.
+    \item \textbf{Source Modules:} \texttt{app/main.py} (API routing), \texttt{app/static/} (Web GIS UI), \texttt{app/hydrology/} (Rainfall \& CWC runoff), \texttt{app/pond/} (Pond scoring), \texttt{app/terrain/} (Priority-Flood \& D8), \texttt{app/dem/} (DEM rasterization), \texttt{app/parser/} (KML parser), \texttt{deploy/} (lifecycle scripts), \texttt{tests/} (45 unit tests).
+    \item \textbf{Live Web GIS Interface:} \url{http://10.1.75.51:3317/}
+    \item \textbf{Interactive Swagger API Documentation:} \url{http://10.1.75.51:3317/docs}
+    \item \textbf{Analytical REST API:} \url{http://10.1.75.51:3317/api/analyze-area}
 \end{itemize}
-
-\subsection{Live Deployment Endpoint}
-\begin{center}
-\textbf{Frontend Web GIS URL:} \url{http://10.1.75.51:3317/} \\
-\textbf{API Endpoint (POST):} \url{http://10.1.75.51:3317/analyzeContour} \\
-\textbf{Area Selection API (POST):} \url{http://10.1.75.51:3317/api/analyze-area} \\
-\textbf{OpenAPI Documentation:} \url{http://10.1.75.51:3317/docs}
-\end{center}
 
 \end{document}
 \endinput
