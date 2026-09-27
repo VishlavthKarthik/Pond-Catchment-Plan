@@ -295,11 +295,6 @@ async function runAnalysis() {
     currentResults = data;
     renderResults(data);
 
-    // Confetti celebration for successful optimal pond recommendation!
-    if (typeof confetti === "function") {
-      confetti({ particleCount: 75, spread: 60, origin: { y: 0.85 } });
-    }
-
   } catch (err) {
     alert("Error running analysis: " + err.message);
   } finally {
