@@ -20,9 +20,11 @@ So index 0 = East (+col), 1 = SE, 2 = S (+row), 3 = SW,
 from __future__ import annotations
 
 import heapq
+import time
 from dataclasses import dataclass
 
 import numpy as np
+from app.telemetry import tracer, algorithm_duration_histogram
 
 
 # ---------------------------------------------------------------------------
@@ -64,40 +66,47 @@ def priority_flood_fill(dem: np.ndarray) -> np.ndarray:
         2-D float64 array of the same shape, with depressions filled.
         NaN cells in the input remain NaN in the output.
     """
-    rows, cols = dem.shape
-    filled = dem.astype(np.float64, copy=True)
-    visited = np.zeros((rows, cols), dtype=bool)
+    with tracer.start_as_current_span("terrain.priority_flood_fill") as span:
+        t0 = time.perf_counter()
+        rows, cols = dem.shape
+        span.set_attribute("terrain.rows", rows)
+        span.set_attribute("terrain.cols", cols)
+        span.set_attribute("terrain.cell_count", rows * cols)
+        filled = dem.astype(np.float64, copy=True)
+        visited = np.zeros((rows, cols), dtype=bool)
 
-    # Priority queue: (elevation, row, col)
-    heap: list[tuple[float, int, int]] = []
+        # Priority queue: (elevation, row, col)
+        heap: list[tuple[float, int, int]] = []
 
-    # Seed the heap with all border cells
-    for r in range(rows):
-        for c in [0, cols - 1]:
-            if not np.isnan(filled[r, c]):
-                heapq.heappush(heap, (filled[r, c], r, c))
-                visited[r, c] = True
-    for c in range(1, cols - 1):
-        for r in [0, rows - 1]:
-            if not np.isnan(filled[r, c]) and not visited[r, c]:
-                heapq.heappush(heap, (filled[r, c], r, c))
-                visited[r, c] = True
+        # Seed the heap with all border cells
+        for r in range(rows):
+            for c in [0, cols - 1]:
+                if not np.isnan(filled[r, c]):
+                    heapq.heappush(heap, (filled[r, c], r, c))
+                    visited[r, c] = True
+        for c in range(1, cols - 1):
+            for r in [0, rows - 1]:
+                if not np.isnan(filled[r, c]) and not visited[r, c]:
+                    heapq.heappush(heap, (filled[r, c], r, c))
+                    visited[r, c] = True
 
-    while heap:
-        elev, r, c = heapq.heappop(heap)
-        for d in range(8):
-            nr, nc = r + _D8_DR[d], c + _D8_DC[d]
-            if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
-                if np.isnan(filled[nr, nc]):
+        while heap:
+            elev, r, c = heapq.heappop(heap)
+            for d in range(8):
+                nr, nc = r + _D8_DR[d], c + _D8_DC[d]
+                if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
+                    if np.isnan(filled[nr, nc]):
+                        visited[nr, nc] = True
+                        continue
                     visited[nr, nc] = True
-                    continue
-                visited[nr, nc] = True
-                # Fill neighbour if it is lower than current cell
-                if filled[nr, nc] < elev:
-                    filled[nr, nc] = elev
-                heapq.heappush(heap, (filled[nr, nc], nr, nc))
+                    # Fill neighbour if it is lower than current cell
+                    if filled[nr, nc] < elev:
+                        filled[nr, nc] = elev
+                    heapq.heappush(heap, (filled[nr, nc], nr, nc))
 
-    return filled
+        algorithm_duration_histogram.record(time.perf_counter() - t0, {"stage": "priority_flood_fill"})
+        span.add_event("depression_fill_finished", {"cells": rows * cols})
+        return filled
 
 
 # ---------------------------------------------------------------------------
@@ -326,15 +335,27 @@ class TerrainAnalysis:
     raw_dem: np.ndarray
 
     def __post_init__(self) -> None:
-        rows, cols = self.raw_dem.shape
-        n_cells = rows * cols
-        use_vectorised = n_cells > 50_000
+        with tracer.start_as_current_span("terrain.pipeline") as span:
+            t0 = time.perf_counter()
+            rows, cols = self.raw_dem.shape
+            n_cells = rows * cols
+            use_vectorised = n_cells > 50_000
+            span.set_attribute("terrain.rows", rows)
+            span.set_attribute("terrain.cols", cols)
+            span.set_attribute("terrain.cell_count", n_cells)
+            span.set_attribute("terrain.vectorised", use_vectorised)
 
-        self.filled_dem: np.ndarray = priority_flood_fill(self.raw_dem)
+            self.filled_dem: np.ndarray = priority_flood_fill(self.raw_dem)
 
-        if use_vectorised:
-            self.flow_dir: np.ndarray = d8_flow_direction_vectorised(self.filled_dem)
-            self.flow_accum: np.ndarray = d8_flow_accumulation_vectorised(self.flow_dir)
-        else:
-            self.flow_dir = d8_flow_direction(self.filled_dem)
-            self.flow_accum = d8_flow_accumulation(self.flow_dir)
+            if use_vectorised:
+                self.flow_dir: np.ndarray = d8_flow_direction_vectorised(self.filled_dem)
+                self.flow_accum: np.ndarray = d8_flow_accumulation_vectorised(self.flow_dir)
+            else:
+                self.flow_dir = d8_flow_direction(self.filled_dem)
+                self.flow_accum = d8_flow_accumulation(self.flow_dir)
+
+            algorithm_duration_histogram.record(time.perf_counter() - t0, {"stage": "terrain_pipeline"})
+            span.add_event(
+                "terrain_pipeline_completed",
+                {"max_accumulation": int(np.nanmax(self.flow_accum)) if self.flow_accum.size > 0 else 0},
+            )

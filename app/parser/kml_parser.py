@@ -163,23 +163,39 @@ def _parse_kml_tree(root: etree._Element) -> ContourDataset:
 # ---------------------------------------------------------------------------
 
 
+from app.telemetry import tracer
+
+
 def parse_kml_bytes(data: bytes, *, source_name: str = "<bytes>") -> ContourDataset:
     """Parse KML content from a bytes buffer.
 
     Raises ``ValueError`` on parse failure or empty dataset.
     """
-    try:
-        root = etree.fromstring(data)
-    except etree.XMLSyntaxError as exc:
-        raise ValueError(f"XML parse error in {source_name}: {exc}") from exc
+    with tracer.start_as_current_span("kml.parse") as span:
+        span.set_attribute("kml.source_name", source_name)
+        span.set_attribute("kml.data_size_bytes", len(data))
 
-    dataset = _parse_kml_tree(root)
-    if not dataset.polylines:
-        raise ValueError(
-            f"No contour polylines could be extracted from {source_name}. "
-            "Make sure the file contains Placemarks with numeric names and LineString geometries."
-        )
-    return dataset
+        try:
+            root = etree.fromstring(data)
+        except etree.XMLSyntaxError as exc:
+            span.record_exception(exc)
+            raise ValueError(f"XML parse error in {source_name}: {exc}") from exc
+
+        dataset = _parse_kml_tree(root)
+        if not dataset.polylines:
+            err = ValueError(
+                f"No contour polylines could be extracted from {source_name}. "
+                "Make sure the file contains Placemarks with numeric names and LineString geometries."
+            )
+            span.record_exception(err)
+            raise err
+
+        span.set_attribute("kml.polylines_count", len(dataset.polylines))
+        span.set_attribute("kml.elevation_min", dataset.elevation_min)
+        span.set_attribute("kml.elevation_max", dataset.elevation_max)
+        span.set_attribute("kml.contour_interval_m", dataset.contour_interval_m)
+        span.add_event("kml_polylines_extracted", {"count": len(dataset.polylines)})
+        return dataset
 
 
 def parse_kml_file(path: str) -> ContourDataset:

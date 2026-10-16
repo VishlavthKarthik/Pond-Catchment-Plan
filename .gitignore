@@ -21,3 +21,6 @@ build/
 *.kmz
 !contours_1m.kml
 REPORT.md
+logs/
+observability/bin/
+observability/*.tar.gz

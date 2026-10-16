@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+import time
 import urllib.request
 import json
+from app.telemetry import tracer, algorithm_duration_histogram
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hydrology.calculator")
 
 
 @dataclass
@@ -37,26 +38,37 @@ def fetch_historical_rainfall(lat: float, lon: float, default_rainfall_mm: float
     
     Regional average for Central India (Raipur/Durg, Chhattisgarh) is ~1150-1250 mm.
     """
-    try:
-        url = (
-            f"https://archive-api.open-meteo.com/v1/archive?"
-            f"latitude={lat:.4f}&longitude={lon:.4f}&"
-            f"start_date=2023-01-01&end_date=2023-12-31&"
-            f"daily=precipitation_sum&timezone=auto"
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "PondCatchmentPlanner/2.0"})
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode("utf-8"))
-                precip_list = data.get("daily", {}).get("precipitation_sum", [])
-                valid_precip = [p for p in precip_list if p is not None]
-                if valid_precip and sum(valid_precip) > 100.0:
-                    annual_total = float(sum(valid_precip))
-                    return round(annual_total, 1), "Open-Meteo Historical Archive (2023)"
-    except Exception as exc:
-        logger.info(f"Open-Meteo rainfall query skipped ({exc}), using regional climate normal.")
-    
-    return default_rainfall_mm, "Regional Climatological Normal (IMD 1991-2020)"
+    with tracer.start_as_current_span("hydrology.fetch_historical_rainfall") as span:
+        span.set_attribute("geo.latitude", lat)
+        span.set_attribute("geo.longitude", lon)
+        try:
+            url = (
+                f"https://archive-api.open-meteo.com/v1/archive?"
+                f"latitude={lat:.4f}&longitude={lon:.4f}&"
+                f"start_date=2023-01-01&end_date=2023-12-31&"
+                f"daily=precipitation_sum&timezone=auto"
+            )
+            span.set_attribute("http.url", url)
+            req = urllib.request.Request(url, headers={"User-Agent": "PondCatchmentPlanner/2.0"})
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    precip_list = data.get("daily", {}).get("precipitation_sum", [])
+                    valid_precip = [p for p in precip_list if p is not None]
+                    if valid_precip and sum(valid_precip) > 100.0:
+                        annual_total = float(sum(valid_precip))
+                        span.set_attribute("rainfall.source", "Open-Meteo Historical Archive (2023)")
+                        span.set_attribute("rainfall.annual_mm", annual_total)
+                        span.add_event("meteo_data_retrieved", {"annual_mm": annual_total})
+                        return round(annual_total, 1), "Open-Meteo Historical Archive (2023)"
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_attribute("rainfall.fallback", True)
+            logger.info(f"Open-Meteo rainfall query skipped ({exc}), using regional climate normal.")
+        
+        span.set_attribute("rainfall.source", "Regional Climatological Normal (IMD 1991-2020)")
+        span.set_attribute("rainfall.annual_mm", default_rainfall_mm)
+        return default_rainfall_mm, "Regional Climatological Normal (IMD 1991-2020)"
 
 
 def compute_runoff_coefficient(mean_slope_pct: float, soil_type: str = "medium") -> float:
@@ -93,7 +105,7 @@ def calculate_hydrology(
     mean_slope_pct: float,
     lat: float,
     lon: float,
-    override_rainfall_mm: Optional[float] = None,
+    override_rainfall_mm: float | None = None,
     soil_type: str = "medium",
     target_pond_depth_m: float = 3.0,
 ) -> HydrologyResult:
@@ -103,64 +115,84 @@ def calculate_hydrology(
       V_runoff (m³) = C * (Rainfall_monsoon / 1000) * Catchment_Area_m²
       Recommended Pond Capacity (m³) = V_runoff * Target_Capture_Ratio (0.60)
     """
-    if override_rainfall_mm and override_rainfall_mm > 0:
-        annual_rainfall = override_rainfall_mm
-        rf_source = "User Specified"
-    else:
-        annual_rainfall, rf_source = fetch_historical_rainfall(lat, lon)
+    with tracer.start_as_current_span("hydrology.calculate") as span:
+        t0 = time.perf_counter()
+        span.set_attribute("hydrology.catchment_area_m2", catchment_area_m2)
+        span.set_attribute("hydrology.mean_slope_pct", mean_slope_pct)
+        span.set_attribute("hydrology.soil_type", soil_type)
+        span.set_attribute("hydrology.target_depth_m", target_pond_depth_m)
 
-    # In monsoonal climates (India), ~85% of annual rainfall falls during June-Sept
-    monsoon_rainfall = round(annual_rainfall * 0.85, 1)
+        if override_rainfall_mm and override_rainfall_mm > 0:
+            annual_rainfall = override_rainfall_mm
+            rf_source = "User Specified"
+        else:
+            annual_rainfall, rf_source = fetch_historical_rainfall(lat, lon)
 
-    runoff_c = compute_runoff_coefficient(mean_slope_pct, soil_type)
+        # In monsoonal climates (India), ~85% of annual rainfall falls during June-Sept
+        monsoon_rainfall = round(annual_rainfall * 0.85, 1)
 
-    # Total runoff volume generated by the catchment during monsoon (m³)
-    # V = C * P * A
-    rainfall_depth_m = monsoon_rainfall / 1000.0
-    runoff_volume_m3 = round(runoff_c * rainfall_depth_m * catchment_area_m2, 1)
-    runoff_liters = round(runoff_volume_m3 * 1000.0, 0)
-    runoff_megaliters = round(runoff_volume_m3 / 1000.0, 2)
+        runoff_c = compute_runoff_coefficient(mean_slope_pct, soil_type)
 
-    # Village Pond Sizing:
-    # A village pond typically targets storing 50-70% of harvestable runoff
-    # to avoid excessive excavation cost while guaranteeing full storage.
-    target_capture_ratio = 0.60
-    target_storage_m3 = round(runoff_volume_m3 * target_capture_ratio, 1)
+        # Total runoff volume generated by the catchment during monsoon (m³)
+        # V = C * P * A
+        rainfall_depth_m = monsoon_rainfall / 1000.0
+        runoff_volume_m3 = round(runoff_c * rainfall_depth_m * catchment_area_m2, 1)
+        runoff_liters = round(runoff_volume_m3 * 1000.0, 0)
+        runoff_megaliters = round(runoff_volume_m3 / 1000.0, 2)
 
-    # Standard pond depth: 3.0m (0.5m silt dead storage + 2.0m active + 0.5m freeboard)
-    depth_m = max(1.5, min(5.0, target_pond_depth_m))
-    
-    # Effective water depth for active storage ~ (depth - 0.5m freeboard)
-    effective_depth = max(1.0, depth_m - 0.5)
+        # Village Pond Sizing:
+        target_capture_ratio = 0.60
+        target_storage_m3 = round(runoff_volume_m3 * target_capture_ratio, 1)
 
-    # Trapezoidal surface area requirement (m²)
-    # Using 1.5:1 side slopes: average cross-section factor ~ 0.85
-    surface_area_m2 = round(target_storage_m3 / (effective_depth * 0.85), 1)
+        # Standard pond depth: 3.0m (0.5m silt dead storage + 2.0m active + 0.5m freeboard)
+        depth_m = max(1.5, min(5.0, target_pond_depth_m))
+        
+        # Effective water depth for active storage ~ (depth - 0.5m freeboard)
+        effective_depth = max(1.0, depth_m - 0.5)
 
-    # Length to Width ratio of 1.5:1
-    # Area = L * W = 1.5 * W²  ==>  W = sqrt(Area / 1.5), L = 1.5 * W
-    width_m = round((surface_area_m2 / 1.5) ** 0.5, 1)
-    length_m = round(width_m * 1.5, 1)
+        # Trapezoidal surface area requirement (m²)
+        surface_area_m2 = round(target_storage_m3 / (effective_depth * 0.85), 1)
 
-    dimensions_str = f"{length_m:.1f}m × {width_m:.1f}m × {depth_m:.1f}m (L × W × D)"
+        # Length to Width ratio of 1.5:1
+        width_m = round((surface_area_m2 / 1.5) ** 0.5, 1)
+        length_m = round(width_m * 1.5, 1)
 
-    # Socio-economic impact:
-    # Standard rural domestic water norm = 55 Litres per capita per day (LPCD)
-    # Average family of 5 = 275 L/day.
-    # Estimated household-days of water security:
-    household_days = int(runoff_liters * 0.70 / 275.0)
+        dimensions_str = f"{length_m:.1f}m × {width_m:.1f}m × {depth_m:.1f}m (L × W × D)"
 
-    return HydrologyResult(
-        annual_rainfall_mm=annual_rainfall,
-        monsoon_rainfall_mm=monsoon_rainfall,
-        runoff_coefficient=runoff_c,
-        expected_water_volume_m3=runoff_volume_m3,
-        expected_water_volume_liters=runoff_liters,
-        expected_water_volume_megaliters=runoff_megaliters,
-        recommended_pond_depth_m=depth_m,
-        recommended_pond_area_m2=surface_area_m2,
-        recommended_pond_storage_capacity_m3=target_storage_m3,
-        recommended_dimensions=dimensions_str,
-        estimated_household_days=household_days,
-        rainfall_source=rf_source,
-    )
+        # Socio-economic impact:
+        household_days = int(runoff_liters * 0.70 / 275.0)
+
+        # Record span attributes and event
+        span.set_attribute("hydrology.annual_rainfall_mm", annual_rainfall)
+        span.set_attribute("hydrology.monsoon_rainfall_mm", monsoon_rainfall)
+        span.set_attribute("hydrology.runoff_coefficient", runoff_c)
+        span.set_attribute("hydrology.runoff_volume_m3", runoff_volume_m3)
+        span.set_attribute("hydrology.runoff_megaliters", runoff_megaliters)
+        span.set_attribute("hydrology.pond_storage_m3", target_storage_m3)
+        span.set_attribute("hydrology.household_water_days", household_days)
+        span.add_event(
+            "hydrology_computation_completed",
+            {
+                "volume_m3": runoff_volume_m3,
+                "megaliters": runoff_megaliters,
+                "storage_m3": target_storage_m3,
+                "dimensions": dimensions_str,
+            },
+        )
+
+        algorithm_duration_histogram.record(time.perf_counter() - t0, {"stage": "hydrology_calculation"})
+
+        return HydrologyResult(
+            annual_rainfall_mm=annual_rainfall,
+            monsoon_rainfall_mm=monsoon_rainfall,
+            runoff_coefficient=runoff_c,
+            expected_water_volume_m3=runoff_volume_m3,
+            expected_water_volume_liters=runoff_liters,
+            expected_water_volume_megaliters=runoff_megaliters,
+            recommended_pond_depth_m=depth_m,
+            recommended_pond_area_m2=surface_area_m2,
+            recommended_pond_storage_capacity_m3=target_storage_m3,
+            recommended_dimensions=dimensions_str,
+            estimated_household_days=household_days,
+            rainfall_source=rf_source,
+        )

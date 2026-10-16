@@ -129,6 +129,10 @@ def _make_grid(
 # ---------------------------------------------------------------------------
 
 
+import time
+from app.telemetry import tracer, algorithm_duration_histogram
+
+
 def build_dem(
     dataset: ContourDataset,
     resolution_m: float = 10.0,
@@ -145,62 +149,80 @@ def build_dem(
     max_grid_cells:
         Upper bound on total grid cells before auto-coarsening.
     """
-    # --- pick UTM CRS from dataset centroid ---
-    all_lons = [c[0] for pl in dataset.polylines for c in pl.coords]
-    all_lats = [c[1] for pl in dataset.polylines for c in pl.coords]
-    centroid_lon = float(np.mean(all_lons))
-    centroid_lat = float(np.mean(all_lats))
-    epsg = _utm_epsg_for_lonlat(centroid_lon, centroid_lat)
+    with tracer.start_as_current_span("dem.build") as span:
+        t0 = time.perf_counter()
+        span.set_attribute("dem.resolution_requested", resolution_m)
+        span.set_attribute("dem.max_grid_cells", max_grid_cells)
 
-    transformer_fwd = Transformer.from_crs(
-        "EPSG:4326", f"EPSG:{epsg}", always_xy=True
-    )
-    transformer_inv = Transformer.from_crs(
-        f"EPSG:{epsg}", "EPSG:4326", always_xy=True
-    )
+        # --- pick UTM CRS from dataset centroid ---
+        all_lons = [c[0] for pl in dataset.polylines for c in pl.coords]
+        all_lats = [c[1] for pl in dataset.polylines for c in pl.coords]
+        centroid_lon = float(np.mean(all_lons))
+        centroid_lat = float(np.mean(all_lats))
+        epsg = _utm_epsg_for_lonlat(centroid_lon, centroid_lat)
 
-    # --- collect reprojected samples ---
-    east, north, elev = _collect_samples(dataset, transformer_fwd)
+        transformer_fwd = Transformer.from_crs(
+            "EPSG:4326", f"EPSG:{epsg}", always_xy=True
+        )
+        transformer_inv = Transformer.from_crs(
+            f"EPSG:{epsg}", "EPSG:4326", always_xy=True
+        )
 
-    # --- auto-coarsening guard rail ---
-    width_m = east.max() - east.min()
-    height_m = north.max() - north.min()
-    auto_adjusted = False
-    actual_resolution_m = resolution_m
+        # --- collect reprojected samples ---
+        east, north, elev = _collect_samples(dataset, transformer_fwd)
 
-    needed_cells = math.ceil(width_m / resolution_m) * math.ceil(height_m / resolution_m)
-    if needed_cells > max_grid_cells:
-        # Compute the minimum resolution that keeps us under the ceiling
-        min_res = math.sqrt((width_m * height_m) / max_grid_cells)
-        # Round up to a "nice" value (nearest 0.5 m step)
-        actual_resolution_m = math.ceil(min_res * 2) / 2
-        auto_adjusted = True
+        # --- auto-coarsening guard rail ---
+        width_m = east.max() - east.min()
+        height_m = north.max() - north.min()
+        auto_adjusted = False
+        actual_resolution_m = resolution_m
 
-    # --- build grid ---
-    e_centres, n_centres, e_origin, n_origin = _make_grid(east, north, actual_resolution_m)
-    cols = len(e_centres)
-    rows = len(n_centres)
+        needed_cells = math.ceil(width_m / resolution_m) * math.ceil(height_m / resolution_m)
+        if needed_cells > max_grid_cells:
+            # Compute the minimum resolution that keeps us under the ceiling
+            min_res = math.sqrt((width_m * height_m) / max_grid_cells)
+            # Round up to a "nice" value (nearest 0.5 m step)
+            actual_resolution_m = math.ceil(min_res * 2) / 2
+            auto_adjusted = True
 
-    # Grid of query points (easting, northing) for each cell centre
-    ee, nn = np.meshgrid(e_centres, n_centres)  # shape [rows, cols]
-    query_pts = np.column_stack([ee.ravel(), nn.ravel()])
-    sample_pts = np.column_stack([east, north])
+        # --- build grid ---
+        e_centres, n_centres, e_origin, n_origin = _make_grid(east, north, actual_resolution_m)
+        cols = len(e_centres)
+        rows = len(n_centres)
 
-    # --- interpolate (linear inside convex hull, then nearest for NaN cells) ---
-    grid_linear = griddata(sample_pts, elev, query_pts, method="linear")
-    nan_mask = np.isnan(grid_linear)
-    if nan_mask.any():
-        grid_nearest = griddata(sample_pts, elev, query_pts[nan_mask], method="nearest")
-        grid_linear[nan_mask] = grid_nearest
+        # Grid of query points (easting, northing) for each cell centre
+        ee, nn = np.meshgrid(e_centres, n_centres)  # shape [rows, cols]
+        query_pts = np.column_stack([ee.ravel(), nn.ravel()])
+        sample_pts = np.column_stack([east, north])
 
-    elevation_grid = grid_linear.reshape(rows, cols).astype(np.float32)
+        # --- interpolate (linear inside convex hull, then nearest for NaN cells) ---
+        grid_linear = griddata(sample_pts, elev, query_pts, method="linear")
+        nan_mask = np.isnan(grid_linear)
+        if nan_mask.any():
+            grid_nearest = griddata(sample_pts, elev, query_pts[nan_mask], method="nearest")
+            grid_linear[nan_mask] = grid_nearest
 
-    return DEMResult(
-        elevation_grid=elevation_grid,
-        transform=(e_origin, n_origin, actual_resolution_m, actual_resolution_m),
-        crs_epsg=epsg,
-        actual_resolution_m=actual_resolution_m,
-        auto_adjusted=auto_adjusted,
-        transformer_to_lonlat=transformer_inv,
-        transformer_to_proj=transformer_fwd,
-    )
+        elevation_grid = grid_linear.reshape(rows, cols).astype(np.float32)
+
+        span.set_attribute("dem.resolution_actual", actual_resolution_m)
+        span.set_attribute("dem.grid_rows", rows)
+        span.set_attribute("dem.grid_cols", cols)
+        span.set_attribute("dem.cell_count", rows * cols)
+        span.set_attribute("dem.auto_adjusted", auto_adjusted)
+        span.set_attribute("dem.crs_epsg", epsg)
+        span.add_event(
+            "dem_interpolation_finished",
+            {"rows": rows, "cols": cols, "resolution_m": actual_resolution_m, "epsg": epsg},
+        )
+
+        algorithm_duration_histogram.record(time.perf_counter() - t0, {"stage": "dem_rasterization"})
+
+        return DEMResult(
+            elevation_grid=elevation_grid,
+            transform=(e_origin, n_origin, actual_resolution_m, actual_resolution_m),
+            crs_epsg=epsg,
+            actual_resolution_m=actual_resolution_m,
+            auto_adjusted=auto_adjusted,
+            transformer_to_lonlat=transformer_inv,
+            transformer_to_proj=transformer_fwd,
+        )

@@ -30,6 +30,7 @@ import numpy as np
 from shapely.geometry import MultiPoint, mapping
 from shapely.ops import unary_union
 
+import time
 from app.dem.builder import DEMResult
 from app.parser.kml_parser import ContourDataset
 from app.terrain.analysis import (
@@ -39,6 +40,7 @@ from app.terrain.analysis import (
     _D8_REVERSE,
     compute_slope_percent,
 )
+from app.telemetry import tracer, algorithm_duration_histogram
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +211,15 @@ def select_pond_and_catchment(
     ------
     ValueError if no valid pond outlet can be identified.
     """
+    span = tracer.start_span("pond.select_and_delineate")
+    t0 = time.perf_counter()
     rows, cols = terrain.flow_accum.shape
     res = dem_result.actual_resolution_m
     cell_area_m2 = res * res
+    span.set_attribute("dem.resolution_m", res)
+    span.set_attribute("dem.rows", rows)
+    span.set_attribute("dem.cols", cols)
+    span.set_attribute("pond.min_catchment_area_m2", min_catchment_area_m2)
 
     # --- build candidate mask (interior cells only) ---
     mask = np.zeros((rows, cols), dtype=bool)
@@ -340,6 +348,28 @@ def select_pond_and_catchment(
 
     # --- GeoJSON representation ---
     geojson_dict = dict(mapping(catchment_poly_wgs84))
+
+    # OpenTelemetry Span attributes & event
+    span.set_attribute("pond.lat", round(float(outlet_lat), 6))
+    span.set_attribute("pond.lon", round(float(outlet_lon), 6))
+    span.set_attribute("pond.elevation_m", round(outlet_elev, 2))
+    span.set_attribute("pond.flow_accumulation_cells", outlet_accum)
+    span.set_attribute("catchment.area_m2", round(area_m2, 2))
+    span.set_attribute("catchment.area_hectares", round(area_ha, 4))
+    span.set_attribute("catchment.mean_slope_pct", round(mean_slope, 2))
+    span.set_attribute("catchment.watershed_cell_count", n_cells)
+    span.add_event(
+        "pond_selected_and_delineated",
+        {
+            "lat": round(float(outlet_lat), 6),
+            "lon": round(float(outlet_lon), 6),
+            "area_ha": round(area_ha, 4),
+            "cells": n_cells,
+        },
+    )
+
+    algorithm_duration_histogram.record(time.perf_counter() - t0, {"stage": "pond_selection"})
+    span.end()
 
     return PondResult(
         pond_site=PondSite(
