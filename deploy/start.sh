@@ -47,21 +47,21 @@ sleep 1
 
 # 4. Start Jaeger
 echo "Starting Jaeger All-in-One (Tracing & UI on :16686, OTLP on :4318)..."
-nohup /home/student/pond_catchment/observability/bin/jaeger-all-in-one > "$LOGS_DIR/jaeger.log" 2>&1 &
+/usr/bin/setsid /home/student/pond_catchment/observability/bin/jaeger-all-in-one </dev/null > "$LOGS_DIR/jaeger.log" 2>&1 &
 echo $! > /home/student/pond_catchment/deploy/jaeger.pid
 
 # 5. Start Prometheus
 echo "Starting Prometheus Server (:9090)..."
-nohup /home/student/pond_catchment/observability/bin/prometheus \
+/usr/bin/setsid /home/student/pond_catchment/observability/bin/prometheus \
   --config.file=/home/student/pond_catchment/observability/prometheus.yml \
   --web.listen-address="0.0.0.0:9090" \
   --storage.tsdb.path="$LOGS_DIR/prometheus_data" \
-  > "$LOGS_DIR/prometheus.log" 2>&1 &
+  </dev/null > "$LOGS_DIR/prometheus.log" 2>&1 &
 echo $! > /home/student/pond_catchment/deploy/prometheus.pid
 
 # 6. Start HydroPond FastAPI Application
 echo "Starting HydroPond API on port ${PORT}..."
-nohup /home/student/pond_catchment/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT} > "$LOGS_DIR/server.log" 2>&1 &
+/usr/bin/setsid /home/student/pond_catchment/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT} </dev/null > "$LOGS_DIR/server.log" 2>&1 &
 echo $! > /home/student/pond_catchment/deploy/server.pid
 
 sleep 2
